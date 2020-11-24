@@ -317,15 +317,29 @@ SymbolRef Symbol::findMemberNoDealias(const GlobalState &gs, NameRef name) const
 }
 
 SymbolRef Symbol::findMemberTransitive(const GlobalState &gs, NameRef name) const {
-    return findMemberTransitiveInternal(gs, name, Flags::NONE, Flags::NONE, 100);
+    // We skip over ZSuper methods by default because at the time this was implemented, it was more
+    // common for call sites to findMemberTransitive to want pretend they didn't exist than they
+    // did. In a sense, this is just like how findMemberTransitive always resolves method aliases.
+    auto dealias = true;
+    return findMemberTransitiveInternal(gs, name, {Flags::METHOD | Flags::METHOD_ZSUPER}, dealias, 100);
+}
+
+SymbolRef Symbol::findMemberTransitiveIncludingZSuperMethods(const GlobalState &gs, NameRef name) const {
+    auto dealias = false;
+    return findMemberTransitiveInternal(gs, name, {}, dealias, 100);
 }
 
 SymbolRef Symbol::findConcreteMethodTransitive(const GlobalState &gs, NameRef name) const {
-    return findMemberTransitiveInternal(gs, name, Flags::METHOD | Flags::METHOD_ABSTRACT, Flags::METHOD, 100);
+    auto exclude = vector<u4>{
+        Flags::METHOD | Flags::METHOD_ABSTRACT,
+        Flags::METHOD | Flags::METHOD_ZSUPER,
+    };
+    auto dealias = true;
+    return findMemberTransitiveInternal(gs, name, exclude, dealias, 100);
 }
 
-SymbolRef Symbol::findMemberTransitiveInternal(const GlobalState &gs, NameRef name, u4 mask, u4 flags,
-                                               int maxDepth) const {
+SymbolRef Symbol::findMemberTransitiveInternal(const GlobalState &gs, NameRef name, const vector<u4> &exclude,
+                                               bool dealias, int maxDepth) const {
     ENFORCE(this->isClassOrModule());
     if (maxDepth == 0) {
         if (auto e = gs.beginError(Loc::none(), errors::Internal::InternalError)) {
@@ -350,9 +364,13 @@ SymbolRef Symbol::findMemberTransitiveInternal(const GlobalState &gs, NameRef na
         Exception::raise("findMemberTransitive hit a loop while resolving");
     }
 
-    SymbolRef result = findMember(gs, name);
+    SymbolRef result = dealias ? findMember(gs, name) : findMemberNoDealias(gs, name);
     if (result.exists()) {
-        if (mask == 0 || (result.data(gs)->flags & mask) == flags) {
+        if (exclude.empty()) {
+            return result;
+        }
+        u4 flags = result.data(gs)->flags;
+        if (absl::c_none_of(exclude, [flags](const u4 exclude) { return (flags & exclude) == exclude; })) {
             return result;
         }
     }
@@ -360,9 +378,13 @@ SymbolRef Symbol::findMemberTransitiveInternal(const GlobalState &gs, NameRef na
         for (auto it = this->mixins().begin(); it != this->mixins().end(); ++it) {
             ENFORCE(it->exists());
             if (isClassOrModuleLinearizationComputed()) {
-                result = it->data(gs)->findMember(gs, name);
+                result = dealias ? it->data(gs)->findMember(gs, name) : it->data(gs)->findMemberNoDealias(gs, name);
                 if (result.exists()) {
-                    if (mask == 0 || (result.data(gs)->flags & mask) == flags) {
+                    if (exclude.empty()) {
+                        return result;
+                    }
+                    u4 flags = result.data(gs)->flags;
+                    if (absl::c_none_of(exclude, [flags](const u4 exclude) { return (flags & exclude) == exclude; })) {
                         return result;
                     }
                 }
@@ -372,14 +394,14 @@ SymbolRef Symbol::findMemberTransitiveInternal(const GlobalState &gs, NameRef na
     } else {
         for (auto it = this->mixins().rbegin(); it != this->mixins().rend(); ++it) {
             ENFORCE(it->exists());
-            result = it->data(gs)->findMemberTransitiveInternal(gs, name, mask, flags, maxDepth - 1);
+            result = it->data(gs)->findMemberTransitiveInternal(gs, name, exclude, dealias, maxDepth - 1);
             if (result.exists()) {
                 return result;
             }
         }
     }
     if (this->superClass().exists()) {
-        return this->superClass().data(gs)->findMemberTransitiveInternal(gs, name, mask, flags, maxDepth - 1);
+        return this->superClass().data(gs)->findMemberTransitiveInternal(gs, name, exclude, dealias, maxDepth - 1);
     }
     return Symbols::noSymbol();
 }
@@ -703,10 +725,15 @@ string Symbol::toStringWithOptions(const GlobalState &gs, int tabs, bool showFul
         if (this->isMethod()) {
             auto methodFlags = InlinedVector<string, 3>{};
 
-            if (this->isMethodPrivate()) {
-                methodFlags.emplace_back("private");
-            } else if (this->isMethodProtected()) {
-                methodFlags.emplace_back("protected");
+            switch (this->methodVisibility()) {
+                case Visibility::Private:
+                    methodFlags.emplace_back("private");
+                    break;
+                case Visibility::Protected:
+                    methodFlags.emplace_back("protected");
+                    break;
+                case Visibility::Public:
+                    break;
             }
 
             if (this->isAbstract()) {
@@ -723,6 +750,9 @@ string Symbol::toStringWithOptions(const GlobalState &gs, int tabs, bool showFul
             }
             if (this->isFinalMethod()) {
                 methodFlags.emplace_back("final");
+            }
+            if (this->isZSuperMethod()) {
+                methodFlags.emplace_back("zsuper");
             }
 
             if (!methodFlags.empty()) {
@@ -1242,8 +1272,8 @@ void Symbol::sanityCheck(const GlobalState &gs) const {
         }
     }
     if (this->isMethod()) {
-        if (isa_type<AliasType>(this->resultType)) {
-            // If we have an alias method, we should never look at it's arguments;
+        if (isa_type<AliasType>(this->resultType) || this->isZSuperMethod()) {
+            // If we have an alias or zsuper method, we should never look at it's arguments;
             // we should instead look at the arguments of whatever we're aliasing.
             ENFORCE_NO_TIMER(this->arguments().empty(), this->show(gs));
         } else {

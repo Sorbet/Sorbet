@@ -13,6 +13,18 @@ using namespace std;
 namespace sorbet::definition_validator {
 
 namespace {
+
+string_view prettyVisibility(core::Visibility visibility) {
+    switch (visibility) {
+        case core::Visibility::Public:
+            return "public";
+        case core::Visibility::Protected:
+            return "protected";
+        case core::Visibility::Private:
+            return "private";
+    }
+}
+
 struct Signature {
     struct {
         absl::InlinedVector<reference_wrapper<const core::ArgInfo>, 4> required;
@@ -308,8 +320,15 @@ void validateOverriding(const core::Context ctx, core::SymbolRef method) {
     for (const auto &overridenMethod : overridenMethods) {
         if (overridenMethod.data(ctx)->isFinalMethod()) {
             if (auto e = ctx.state.beginError(method.data(ctx)->loc(), core::errors::Resolver::OverridesFinal)) {
-                e.setHeader("`{}` was declared as final and cannot be overridden by `{}`",
-                            overridenMethod.data(ctx)->show(ctx), method.data(ctx)->show(ctx));
+                if (method.data(ctx)->isZSuperMethod()) {
+                    auto visi = prettyVisibility(method.data(ctx)->methodVisibility());
+                    e.setHeader("`{}` was declared as final and cannot be marked `{}` in `{}`",
+                                overridenMethod.data(ctx)->show(ctx), visi, klass.data(ctx)->show(ctx));
+
+                } else {
+                    e.setHeader("`{}` was declared as final and cannot be overridden by `{}`",
+                                overridenMethod.data(ctx)->show(ctx), method.data(ctx)->show(ctx));
+                }
                 e.addErrorLine(overridenMethod.data(ctx)->loc(), "original method defined here");
             }
         }
@@ -333,7 +352,18 @@ void validateOverriding(const core::Context ctx, core::SymbolRef method) {
         }
         if ((overridenMethod.data(ctx)->isAbstract() || overridenMethod.data(ctx)->isOverridable()) &&
             !method.data(ctx)->isIncompatibleOverride() && !isRBI && !method.data(ctx)->isRewriterSynthesized()) {
-            validateCompatibleOverride(ctx, overridenMethod, method);
+            if (method.data(ctx)->isZSuperMethod() && overridenMethod.data(ctx)->isMethodPublic() &&
+                method.data(ctx)->isMethodPrivate()) {
+                if (auto e = ctx.state.beginError(method.data(ctx)->loc(), core::errors::Resolver::BadMethodOverride)) {
+                    auto parentKind = overridenMethod.data(ctx)->isAbstract() ? "abstract" : "overridable";
+                    e.setHeader("Can't narrow visibility of `{}` method `{}` from public to private", parentKind,
+                                overridenMethod.data(ctx)->show(ctx));
+                    e.addErrorLine(overridenMethod.data(ctx)->loc(), "Parent method efined here");
+                }
+            } else {
+                // ZSupper methods don't have args or return type, so doesn't make sense to validateCompatibleOverride
+                validateCompatibleOverride(ctx, overridenMethod, method);
+            }
         }
     }
 }
@@ -408,6 +438,28 @@ void validateFinal(core::Context ctx, const core::SymbolRef klass, const ast::Cl
     const auto singleton = klass.data(ctx)->lookupSingletonClass(ctx);
     validateFinalAncestorHelper(ctx, singleton, classDef, klass, "extended");
     validateFinalMethodHelper(ctx, singleton, klass);
+}
+
+void validateZSuper(const core::Context ctx, const core::SymbolRef klass) {
+    for (const auto [name, sym] : klass.data(ctx)->members()) {
+        if (!(sym.exists() && sym.data(ctx)->isMethod() && sym.data(ctx)->isZSuperMethod())) {
+            continue;
+        }
+
+        auto parentMethod = klass.data(ctx)->findMemberTransitive(ctx, name);
+        if (!parentMethod.exists()) {
+            if (auto e = ctx.state.beginError(sym.data(ctx)->loc(), core::errors::Resolver::ZSuperNoParentMethod)) {
+                auto visi = prettyVisibility(sym.data(ctx)->methodVisibility());
+                e.setHeader("No method called `{}` exists to be made `{}` in `{}`", name.data(ctx)->show(ctx), visi,
+                            klass.data(ctx)->show(ctx));
+            }
+        } else {
+            ENFORCE(parentMethod.data(ctx)->isMethod());
+            ENFORCE(!parentMethod.data(ctx)->isZSuperMethod());
+
+            validateOverriding(ctx, sym);
+        }
+    }
 }
 
 // Ignore RBI files for the purpose of checking sealed (unless there are no other files).
@@ -582,6 +634,8 @@ public:
         validateAbstract(ctx, singleton);
         validateFinal(ctx, sym, classDef);
         validateSealed(ctx, sym, classDef);
+        validateZSuper(ctx, sym);
+        validateZSuper(ctx, singleton);
         return tree;
     }
 

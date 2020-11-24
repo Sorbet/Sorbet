@@ -971,10 +971,16 @@ class SymbolDefiner {
                 // we don't have a method definition with the right argument structure, so we need to mangle the
                 // existing one and create a new one
                 if (!isIntrinsic(sym.data(ctx))) {
-                    paramMismatchErrors(ctx.withOwner(sym), declLoc, parsedArgs);
-                    ctx.state.mangleRenameSymbol(sym, method.name);
-                    // Re-enter a new symbol.
-                    sym = ctx.state.enterMethodSymbol(declLoc, owner, method.name);
+                    if (sym.data(ctx)->isZSuperMethod()) {
+                        // private :foo before def foo; end, or class reopened in separate files (like .rb + .rbi)
+                        // This means we found the method's arity now, and can re-use the existing symbol.
+                        sym.data(ctx)->unsetZSuperMethod();
+                    } else {
+                        paramMismatchErrors(ctx.withOwner(sym), declLoc, parsedArgs);
+                        ctx.state.mangleRenameSymbol(sym, method.name);
+                        // Re-enter a new symbol.
+                        sym = ctx.state.enterMethodSymbol(declLoc, owner, method.name);
+                    }
                 } else {
                     // ...unless it's an intrinsic, because we allow multiple incompatible definitions of those in code
                     // TODO(jvilk): Wouldn't this always fail since `!sym.exists()`?
@@ -1022,21 +1028,32 @@ class SymbolDefiner {
             owner = owner.data(ctx)->singletonClass(ctx);
         }
         auto method = ctx.state.lookupMethodSymbol(owner, mod.target);
-        if (method.exists()) {
-            switch (mod.name._id) {
-                case core::Names::private_()._id:
-                case core::Names::privateClassMethod()._id:
-                    method.data(ctx)->setMethodPrivate();
-                    break;
-                case core::Names::protected_()._id:
-                    method.data(ctx)->setMethodProtected();
-                    break;
-                case core::Names::public_()._id:
-                    method.data(ctx)->setMethodPublic();
-                    break;
-                default:
-                    break;
-            }
+        if (!method.exists()) {
+            auto declLoc = mod.loc;
+
+            auto methodDefFlags = ast::MethodDef::Flags{};
+            methodDefFlags.isSelfMethod = mod.name == core::Names::privateClassMethod();
+
+            // TODO(jez) Try running Sorbet in debug mode on pay-server to test no args.
+            auto tmpFoundMethod = FoundMethod{mod.owner, mod.target, mod.loc, declLoc, methodDefFlags, {}, {}};
+            method = defineMethod(ctx, tmpFoundMethod);
+
+            method.data(ctx)->setZSuperMethod();
+        }
+
+        switch (mod.name._id) {
+            case core::Names::private_()._id:
+            case core::Names::privateClassMethod()._id:
+                method.data(ctx)->setMethodPrivate();
+                break;
+            case core::Names::protected_()._id:
+                method.data(ctx)->setMethodProtected();
+                break;
+            case core::Names::public_()._id:
+                method.data(ctx)->setMethodPublic();
+                break;
+            default:
+                break;
         }
     }
 

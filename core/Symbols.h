@@ -32,6 +32,12 @@ public:
 
 enum class Variance { CoVariant = 1, ContraVariant = -1, Invariant = 0 };
 
+enum class Visibility : u1 {
+    Public = 1,
+    Protected,
+    Private,
+};
+
 class Symbol final {
 public:
     Symbol(const Symbol &) = delete;
@@ -91,6 +97,7 @@ public:
         static constexpr u4 METHOD_OVERRIDE = 0x0000'1000;
         [[deprecated]] static constexpr u4 METHOD_IMPLEMENTATION = 0x0000'2000;
         static constexpr u4 METHOD_INCOMPATIBLE_OVERRIDE = 0x0000'4000;
+        static constexpr u4 METHOD_ZSUPER = 0x0000'8000;
 
         // Type flags
         static constexpr u4 TYPE_COVARIANT = 0x0000'0010;
@@ -267,6 +274,28 @@ public:
         return (flags & Symbol::Flags::METHOD_PRIVATE) != 0;
     }
 
+    Visibility methodVisibility() const {
+        if (isMethodPublic()) {
+            return Visibility::Public;
+        } else if (isMethodProtected()) {
+            return Visibility::Protected;
+        } else if (isMethodPrivate()) {
+            return Visibility::Private;
+        } else {
+            Exception::raise("Expected method to have visibility");
+        }
+    }
+
+    // This is analogous to the Ruby VM's VM_METHOD_TYPE_ZSUPER in method.h
+    // ZSuper methods are created by `private :foo` when `foo` is actually defined on an ancestor.
+    // They're called this because they behave like methods that just do
+    //   def foo(*args); super; end
+    // and zsuper is the node type for that super with no args that means "forward my args"
+    inline bool isZSuperMethod() const {
+        ENFORCE_NO_TIMER(isMethod());
+        return (flags & Symbol::Flags::METHOD_ZSUPER) != 0;
+    }
+
     inline bool isClassOrModuleModule() const {
         ENFORCE_NO_TIMER(isClassOrModule());
         if (flags & Symbol::Flags::CLASS_OR_MODULE_MODULE)
@@ -440,6 +469,16 @@ public:
         flags |= Symbol::Flags::METHOD_PRIVATE;
     }
 
+    inline void setZSuperMethod() {
+        ENFORCE_NO_TIMER(isMethod());
+        flags |= Symbol::Flags::METHOD_ZSUPER;
+    }
+
+    inline void unsetZSuperMethod() {
+        ENFORCE_NO_TIMER(isMethod());
+        flags &= ~Symbol::Flags::METHOD_ZSUPER;
+    }
+
     inline void setClassOrModuleAbstract() {
         ENFORCE(isClassOrModule());
         flags |= Symbol::Flags::CLASS_OR_MODULE_ABSTRACT;
@@ -497,6 +536,7 @@ public:
     SymbolRef findMember(const GlobalState &gs, NameRef name) const;
     SymbolRef findMemberNoDealias(const GlobalState &gs, NameRef name) const;
     SymbolRef findMemberTransitive(const GlobalState &gs, NameRef name) const;
+    SymbolRef findMemberTransitiveIncludingZSuperMethods(const GlobalState &gs, NameRef name) const;
     SymbolRef findConcreteMethodTransitive(const GlobalState &gs, NameRef name) const;
 
     /* transitively finds a member with the most similar name */
@@ -657,8 +697,8 @@ private:
     InlinedVector<SymbolRef, 4> typeParams;
     InlinedVector<Loc, 2> locs_;
 
-    SymbolRef findMemberTransitiveInternal(const GlobalState &gs, NameRef name, u4 mask, u4 flags,
-                                           int maxDepth = 100) const;
+    SymbolRef findMemberTransitiveInternal(const GlobalState &gs, NameRef name, const std::vector<u4> &exclude,
+                                           bool dealias, int maxDepth = 100) const;
 
     inline void unsetClassOrModuleLinearizationComputed() {
         ENFORCE(isClassOrModule());
