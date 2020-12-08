@@ -91,12 +91,12 @@ KnowledgeFilter::KnowledgeFilter(core::Context ctx, unique_ptr<cfg::CFG> &cfg) {
         changed = false;
         for (auto &bb : cfg->forwardsTopoSort) {
             for (auto &bind : bb->exprs) {
-                if (auto *id = cfg::cast_instruction<cfg::Ident>(bind.value.get())) {
+                if (auto *id = cfg::cast_instruction<cfg::Ident>(bind.value)) {
                     if (isNeeded(bind.bind.variable) && !isNeeded(id->what)) {
                         used_vars[id->what.id()] = true;
                         changed = true;
                     }
-                } else if (auto *send = cfg::cast_instruction<cfg::Send>(bind.value.get())) {
+                } else if (auto *send = cfg::cast_instruction<cfg::Send>(bind.value)) {
                     if (send->fun == core::Names::bang()) {
                         if (send->args.empty()) {
                             if (isNeeded(bind.bind.variable) && !isNeeded(send->recv.variable)) {
@@ -928,37 +928,37 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                                           core::TypeConstraint &constr, core::TypePtr &methodReturnType) {
     try {
         core::TypeAndOrigins tp;
-        bool noLoopChecking = cfg::isa_instruction<cfg::Alias>(bind.value.get()) ||
-                              cfg::isa_instruction<cfg::LoadArg>(bind.value.get()) ||
-                              cfg::isa_instruction<cfg::LoadSelf>(bind.value.get());
+        bool noLoopChecking = cfg::isa_instruction<cfg::Alias>(bind.value) ||
+                              cfg::isa_instruction<cfg::LoadArg>(bind.value) ||
+                              cfg::isa_instruction<cfg::LoadSelf>(bind.value);
 
         bool checkFullyDefined = true;
         const core::lsp::Query &lspQuery = ctx.state.lspQuery;
         bool lspQueryMatch = lspQuery.matchesLoc(core::Loc(ctx.file, bind.loc));
 
         typecase(
-            bind.value.get(),
-            [&](cfg::Send *send) {
+            bind.value,
+            [&](cfg::Send &send) {
                 InlinedVector<const core::TypeAndOrigins *, 2> args;
 
-                args.reserve(send->args.size());
-                for (cfg::VariableUseSite &arg : send->args) {
+                args.reserve(send.args.size());
+                for (cfg::VariableUseSite &arg : send.args) {
                     args.emplace_back(&getAndFillTypeAndOrigin(ctx, arg));
                 }
 
-                const core::TypeAndOrigins &recvType = getAndFillTypeAndOrigin(ctx, send->recv);
-                if (send->link) {
+                const core::TypeAndOrigins &recvType = getAndFillTypeAndOrigin(ctx, send.recv);
+                if (send.link) {
                     checkFullyDefined = false;
                 }
                 core::CallLocs locs{
                     ctx.file,
                     bind.loc,
-                    send->receiverLoc,
-                    send->argLocs,
+                    send.receiverLoc,
+                    send.argLocs,
                 };
 
-                core::DispatchArgs dispatchArgs{send->fun,     locs,          send->numPosArgs, args,    recvType.type,
-                                                recvType.type, recvType.type, send->link,       ownerLoc};
+                core::DispatchArgs dispatchArgs{send.fun,      locs,          send.numPosArgs, args,    recvType.type,
+                                                recvType.type, recvType.type, send.link,       ownerLoc};
                 auto dispatched = recvType.type.dispatchCall(ctx, dispatchArgs);
 
                 auto it = &dispatched;
@@ -977,8 +977,7 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                     //  - When a method doesn't exist.
                     //
                     // In all of these cases, we bail out and skip the non-private checking.
-                    if (it->main.method.exists() && it->main.method.data(ctx)->isMethodPrivate() &&
-                        !send->isPrivateOk) {
+                    if (it->main.method.exists() && it->main.method.data(ctx)->isMethodPrivate() && !send.isPrivateOk) {
                         if (auto e = ctx.beginError(bind.loc, core::errors::Infer::PrivateMethod)) {
                             e.setHeader("Non-private call to private method `{}`", it->main.method.show(ctx));
                             e.addErrorLine(it->main.method.data(ctx)->loc(), "Defined as");
@@ -989,22 +988,22 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                     it = it->secondary.get();
                 }
                 shared_ptr<core::DispatchResult> retainedResult;
-                if (send->link) {
+                if (send.link) {
                     // this type should never be used, thus we put a useless type
                     tp.type = core::Types::void_();
                 } else {
                     tp.type = dispatched.returnType;
                 }
-                if (send->link || lspQueryMatch) {
+                if (send.link || lspQueryMatch) {
                     retainedResult = make_shared<core::DispatchResult>(std::move(dispatched));
                 }
                 if (lspQueryMatch) {
                     core::lsp::QueryResponse::pushQueryResponse(
                         ctx,
-                        core::lsp::SendResponse(core::Loc(ctx.file, bind.loc), retainedResult, send->fun,
-                                                send->isPrivateOk, ctx.owner, core::Loc(ctx.file, send->receiverLoc)));
+                        core::lsp::SendResponse(core::Loc(ctx.file, bind.loc), retainedResult, send.fun,
+                                                send.isPrivateOk, ctx.owner, core::Loc(ctx.file, send.receiverLoc)));
                 }
-                if (send->link) {
+                if (send.link) {
                     // This should eventually become ENFORCEs but currently they are wrong
                     if (!retainedResult->main.blockReturnType) {
                         retainedResult->main.blockReturnType = core::Types::untyped(ctx, retainedResult->main.method);
@@ -1014,25 +1013,25 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                     }
                     ENFORCE(retainedResult->main.sendTp);
 
-                    send->link->result = move(retainedResult);
+                    send.link->result = move(retainedResult);
                 }
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::Ident *i) {
-                const core::TypeAndOrigins &typeAndOrigin = getTypeAndOrigin(ctx, i->what);
+            [&](cfg::Ident &i) {
+                const core::TypeAndOrigins &typeAndOrigin = getTypeAndOrigin(ctx, i.what);
                 tp.type = typeAndOrigin.type;
                 tp.origins = typeAndOrigin.origins;
 
                 if (lspQueryMatch && !bind.value->isSynthetic) {
                     core::lsp::QueryResponse::pushQueryResponse(
                         ctx,
-                        core::lsp::IdentResponse(core::Loc(ctx.file, bind.loc), i->what.data(inWhat), tp, ctx.owner));
+                        core::lsp::IdentResponse(core::Loc(ctx.file, bind.loc), i.what.data(inWhat), tp, ctx.owner));
                 }
 
                 ENFORCE(ctx.file.data(ctx).hasParseErrors || !tp.origins.empty(), "Inferencer did not assign location");
             },
-            [&](cfg::Alias *a) {
-                core::SymbolRef symbol = a->what.data(ctx)->dealias(ctx);
+            [&](cfg::Alias &a) {
+                core::SymbolRef symbol = a.what.data(ctx)->dealias(ctx);
                 const auto &data = symbol.data(ctx);
                 if (data->isClassOrModule()) {
                     auto singletonClass = data->lookupSingletonClass(ctx);
@@ -1074,25 +1073,25 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
 
                 pinnedTypes[bind.bind.variable] = tp;
             },
-            [&](cfg::SolveConstraint *i) {
-                if (i->link->result->main.constr && !i->link->result->main.constr->solve(ctx)) {
+            [&](cfg::SolveConstraint &i) {
+                if (i.link->result->main.constr && !i.link->result->main.constr->solve(ctx)) {
                     if (auto e = ctx.beginError(bind.loc, core::errors::Infer::GenericMethodConstaintUnsolved)) {
                         e.setHeader("Could not find valid instantiation of type parameters");
                     }
                 }
 
                 core::TypePtr type;
-                if (i->link->result->main.constr) {
+                if (i.link->result->main.constr) {
                     // TODO: this should repeat the same dance with Or and And components that dispatchCall does
-                    type = core::Types::instantiate(ctx, i->link->result->main.sendTp, *i->link->result->main.constr);
+                    type = core::Types::instantiate(ctx, i.link->result->main.sendTp, *i.link->result->main.constr);
                 } else {
-                    type = i->link->result->returnType;
+                    type = i.link->result->returnType;
                 }
-                type = flatmapHack(ctx, i->link->result->main.receiver, type, i->link->fun);
+                type = flatmapHack(ctx, i.link->result->main.receiver, type, i.link->fun);
                 tp.type = std::move(type);
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::LoadArg *i) {
+            [&](cfg::LoadArg &i) {
                 /* read type from info filled by define_method */
                 /*
                  * TODO(nelhage): This should arguably use the klass and targs
@@ -1106,23 +1105,23 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                 // ENFORCE(ctx.owner == i->method); TODO: re-enable when https://github.com/sorbet/sorbet/issues/904 is
                 // fixed
 
-                auto argType = i->argument(ctx).argumentTypeAsSeenByImplementation(ctx, constr);
+                auto argType = i.argument(ctx).argumentTypeAsSeenByImplementation(ctx, constr);
                 tp.type = std::move(argType);
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::ArgPresent *i) {
+            [&](cfg::ArgPresent &i) {
                 // Return an unanalyzable boolean value that indicates whether or not arg was provided
                 // It's unanalyzable because it varies by each individual call site.
-                ENFORCE(ctx.owner == i->method);
+                ENFORCE(ctx.owner == i.method);
 
                 tp.type = core::Types::Boolean();
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::LoadYieldParams *insn) {
-                ENFORCE(insn->link);
-                ENFORCE(insn->link->result);
-                ENFORCE(insn->link->result->main.blockPreType);
-                auto &procType = insn->link->result->main.blockPreType;
+            [&](cfg::LoadYieldParams &insn) {
+                ENFORCE(insn.link);
+                ENFORCE(insn.link->result);
+                ENFORCE(insn.link->result->main.blockPreType);
+                auto &procType = insn.link->result->main.blockPreType;
                 auto params = procType.getCallArguments(ctx, core::Names::call());
 
                 // A multi-arg proc, if provided a single arg which is an array,
@@ -1131,7 +1130,7 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                 // TODO(nelhage): If this block is a lambda, not a proc, this
                 // rule doesn't apply. We don't model the distinction accurately
                 // yet.
-                auto &blkArgs = insn->link->argFlags;
+                auto &blkArgs = insn.link->argFlags;
                 auto *tuple = core::cast_type<core::TupleType>(params);
                 if (blkArgs.size() > 1 && !blkArgs.front().isRepeated && tuple && tuple->elems.size() == 1 &&
                     tuple->elems.front().derivesFrom(ctx, core::Symbols::Array())) {
@@ -1143,11 +1142,11 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                 }
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::Return *i) {
+            [&](cfg::Return &i) {
                 tp.type = core::Types::bottom();
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
 
-                const core::TypeAndOrigins &typeAndOrigin = getAndFillTypeAndOrigin(ctx, i->what);
+                const core::TypeAndOrigins &typeAndOrigin = getAndFillTypeAndOrigin(ctx, i.what);
                 if (core::Types::isSubType(ctx, core::Types::void_(), methodReturnType)) {
                     methodReturnType = core::Types::untypedUntracked();
                 }
@@ -1168,19 +1167,19 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                     }
                 }
             },
-            [&](cfg::BlockReturn *i) {
-                ENFORCE(i->link);
-                ENFORCE(i->link->result->main.blockReturnType != nullptr);
+            [&](cfg::BlockReturn &i) {
+                ENFORCE(i.link);
+                ENFORCE(i.link->result->main.blockReturnType != nullptr);
 
-                const core::TypeAndOrigins &typeAndOrigin = getAndFillTypeAndOrigin(ctx, i->what);
-                auto expectedType = i->link->result->main.blockReturnType;
+                const core::TypeAndOrigins &typeAndOrigin = getAndFillTypeAndOrigin(ctx, i.what);
+                auto expectedType = i.link->result->main.blockReturnType;
                 if (core::Types::isSubType(ctx, core::Types::void_(), expectedType)) {
                     expectedType = core::Types::untypedUntracked();
                 }
                 bool isSubtype;
-                if (i->link->result->main.constr) {
+                if (i.link->result->main.constr) {
                     isSubtype =
-                        core::Types::isSubTypeUnderConstraint(ctx, *i->link->result->main.constr, typeAndOrigin.type,
+                        core::Types::isSubTypeUnderConstraint(ctx, *i.link->result->main.constr, typeAndOrigin.type,
                                                               expectedType, core::UntypedMode::AlwaysCompatible);
                 } else {
                     isSubtype = core::Types::isSubType(ctx, typeAndOrigin.type, expectedType);
@@ -1202,8 +1201,8 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                 tp.type = core::Types::bottom();
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::Literal *i) {
-                tp.type = i->value;
+            [&](cfg::Literal &i) {
+                tp.type = i.value;
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
 
                 if (lspQueryMatch) {
@@ -1211,8 +1210,8 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                         ctx, core::lsp::LiteralResponse(core::Loc(ctx.file, bind.loc), tp));
                 }
             },
-            [&](cfg::TAbsurd *i) {
-                const core::TypeAndOrigins &typeAndOrigin = getTypeAndOrigin(ctx, i->what.variable);
+            [&](cfg::TAbsurd &i) {
+                const core::TypeAndOrigins &typeAndOrigin = getTypeAndOrigin(ctx, i.what.variable);
 
                 if (auto e = ctx.beginError(bind.loc, core::errors::Infer::NotExhaustive)) {
                     if (typeAndOrigin.type.isUntyped()) {
@@ -1228,23 +1227,23 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                 tp.type = core::Types::bottom();
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::GetCurrentException *i) {
+            [&](cfg::GetCurrentException &i) {
                 tp.type = core::Types::untypedUntracked();
                 tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
             },
-            [&](cfg::LoadSelf *l) {
-                ENFORCE(l->link);
-                if (l->link->result->main.blockSpec.rebind.exists()) {
-                    tp.type = l->link->result->main.blockSpec.rebind.data(ctx)->externalType();
+            [&](cfg::LoadSelf &l) {
+                ENFORCE(l.link);
+                if (l.link->result->main.blockSpec.rebind.exists()) {
+                    tp.type = l.link->result->main.blockSpec.rebind.data(ctx)->externalType();
                     tp.origins.emplace_back(core::Loc(ctx.file, bind.loc));
 
                 } else {
-                    tp = getTypeAndOrigin(ctx, l->fallback);
+                    tp = getTypeAndOrigin(ctx, l.fallback);
                 }
             },
-            [&](cfg::Cast *c) {
+            [&](cfg::Cast &c) {
                 auto klass = ctx.owner.data(ctx)->enclosingClass(ctx);
-                auto castType = core::Types::instantiate(ctx, c->type, klass.data(ctx)->typeMembers(),
+                auto castType = core::Types::instantiate(ctx, c.type, klass.data(ctx)->typeMembers(),
                                                          klass.data(ctx)->selfTypeArgs(ctx));
 
                 tp.type = castType;
@@ -1254,10 +1253,10 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                     noLoopChecking = true;
                 }
 
-                const core::TypeAndOrigins &ty = getAndFillTypeAndOrigin(ctx, c->value);
-                ENFORCE(c->cast != core::Names::uncheckedLet());
-                if (c->cast != core::Names::cast()) {
-                    if (c->cast == core::Names::assertType() && ty.type.isUntyped()) {
+                const core::TypeAndOrigins &ty = getAndFillTypeAndOrigin(ctx, c.value);
+                ENFORCE(c.cast != core::Names::uncheckedLet());
+                if (c.cast != core::Names::cast()) {
+                    if (c.cast == core::Names::assertType() && ty.type.isUntyped()) {
                         if (auto e = ctx.beginError(bind.loc, core::errors::Infer::CastTypeMismatch)) {
                             e.setHeader("The typechecker was unable to infer the type of the asserted value");
                             e.addErrorSection(core::ErrorSection("Got " + ty.type.show(ctx) + " originating from:",
@@ -1271,7 +1270,7 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                                                                  ty.origins2Explanations(ctx, ownerLoc)));
                         }
                     }
-                } else if (!c->isSynthetic) {
+                } else if (!c.isSynthetic) {
                     if (castType.isUntyped()) {
                         if (auto e = ctx.beginError(bind.loc, core::errors::Infer::InvalidCast)) {
                             e.setHeader("Please use `T.unsafe(...)` to cast to T.untyped");
@@ -1283,12 +1282,12 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                         }
                     }
                 }
-                if (c->cast == core::Names::let()) {
+                if (c.cast == core::Names::let()) {
                     pinnedTypes[bind.bind.variable] = tp;
                 }
             });
 
-        ENFORCE(tp.type != nullptr, "Inferencer did not assign type: {}", bind.value->toString(ctx, inWhat));
+        ENFORCE(tp.type != nullptr, "Inferencer did not assign type: {}", bind.value.toString(ctx, inWhat));
         tp.type.sanityCheck(ctx);
 
         if (checkFullyDefined && !tp.type.isFullyDefined()) {
@@ -1343,7 +1342,7 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
                         break;
                     default: {
                         if (!asGoodAs || (tp.type.isUntyped() && !cur.type.isUntyped())) {
-                            if (auto ident = cfg::cast_instruction<cfg::Ident>(bind.value.get())) {
+                            if (auto ident = cfg::cast_instruction<cfg::Ident>(bind.value)) {
                                 // See cfg/builder/builder_walk.cc for an explanation of why this is here.
                                 if (ident->what.data(inWhat)._name == core::Names::blockBreakAssign()) {
                                     break;
@@ -1392,9 +1391,9 @@ core::TypePtr Environment::processBinding(core::Context ctx, const cfg::CFG &inW
         setTypeAndOrigin(bind.bind.variable, tp);
 
         clearKnowledge(ctx, bind.bind.variable, knowledgeFilter);
-        if (auto *send = cfg::cast_instruction<cfg::Send>(bind.value.get())) {
+        if (auto *send = cfg::cast_instruction<cfg::Send>(bind.value)) {
             updateKnowledge(ctx, bind.bind.variable, core::Loc(ctx.file, bind.loc), send, knowledgeFilter);
-        } else if (auto *i = cfg::cast_instruction<cfg::Ident>(bind.value.get())) {
+        } else if (auto *i = cfg::cast_instruction<cfg::Ident>(bind.value)) {
             propagateKnowledge(ctx, bind.bind.variable, i->what, knowledgeFilter);
         }
 

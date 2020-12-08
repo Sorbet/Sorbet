@@ -32,9 +32,9 @@ unique_ptr<CFG> CFGBuilder::buildFor(core::Context ctx, ast::MethodDef &md) {
             selfClaz = md.symbol;
         }
         synthesizeExpr(entry, LocalRef::selfVariable(), md.loc,
-                       make_unique<Cast>(LocalRef::selfVariable(),
-                                         selfClaz.data(ctx)->enclosingClass(ctx).data(ctx)->selfType(ctx),
-                                         core::Names::cast()));
+                       make_insn<Cast>(LocalRef::selfVariable(),
+                                       selfClaz.data(ctx)->enclosingClass(ctx).data(ctx)->selfType(ctx),
+                                       core::Names::cast()));
 
         BasicBlock *presentCont = entry;
         BasicBlock *defaultCont = nullptr;
@@ -68,14 +68,14 @@ unique_ptr<CFG> CFGBuilder::buildFor(core::Context ctx, ast::MethodDef &md) {
                     auto [result, presentNext, defaultNext] =
                         walkDefault(cctx, i, argInfo, local, a->loc, opt->default_, presentCont, defaultCont);
 
-                    synthesizeExpr(defaultNext, local, a->loc, make_unique<Ident>(result));
+                    synthesizeExpr(defaultNext, local, a->loc, make_insn<Ident>(result));
 
                     presentCont = presentNext;
                     defaultCont = defaultNext;
                 }
             }
 
-            synthesizeExpr(presentCont, local, a->loc, make_unique<LoadArg>(md.symbol, i));
+            synthesizeExpr(presentCont, local, a->loc, make_insn<LoadArg>(md.symbol, i));
         }
 
         // Join the presentCont and defaultCont paths together
@@ -89,17 +89,16 @@ unique_ptr<CFG> CFGBuilder::buildFor(core::Context ctx, ast::MethodDef &md) {
 
     LocalRef retSym1 = LocalRef::finalReturn();
 
-    auto rvLoc = cont->exprs.empty() || isa_instruction<LoadArg>(cont->exprs.back().value.get())
-                     ? md.loc
-                     : cont->exprs.back().loc;
-    synthesizeExpr(cont, retSym1, rvLoc, make_unique<Return>(retSym)); // dead assign.
+    auto rvLoc =
+        cont->exprs.empty() || isa_instruction<LoadArg>(cont->exprs.back().value) ? md.loc : cont->exprs.back().loc;
+    synthesizeExpr(cont, retSym1, rvLoc, make_insn<Return>(retSym)); // dead assign.
     jumpToDead(cont, *res.get(), rvLoc);
 
     vector<Binding> aliasesPrefix;
     for (auto kv : aliases) {
         core::SymbolRef global = kv.first;
         LocalRef local = kv.second;
-        aliasesPrefix.emplace_back(local, core::LocOffsets::none(), make_unique<Alias>(global));
+        aliasesPrefix.emplace_back(local, core::LocOffsets::none(), make_insn<Alias>(global));
         if (global.data(ctx)->isField() || global.data(ctx)->isStaticField()) {
             res->minLoops[local.id()] = CFG::MIN_LOOP_FIELD;
         } else {
@@ -108,7 +107,7 @@ unique_ptr<CFG> CFGBuilder::buildFor(core::Context ctx, ast::MethodDef &md) {
     }
     for (auto kv : discoveredUndeclaredFields) {
         aliasesPrefix.emplace_back(kv.second, core::LocOffsets::none(),
-                                   make_unique<Alias>(core::Symbols::Magic_undeclaredFieldStub(), kv.first));
+                                   make_insn<Alias>(core::Symbols::Magic_undeclaredFieldStub(), kv.first));
         res->minLoops[kv.second.id()] = CFG::MIN_LOOP_FIELD;
     }
     histogramInc("cfgbuilder.aliases", aliasesPrefix.size());
