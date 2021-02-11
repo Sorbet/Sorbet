@@ -104,6 +104,9 @@ Usage:
       --enable-experimental-lsp-signature-help
                                 Enable experimental LSP feature: Signature
                                 Help
+      --enable-experimental-lsp-go-to-implementation
+                                Enable experimental LSP feature: Go To
+                                Implementation
       --enable-all-experimental-lsp-features
                                 Enable every experimental LSP feature.
                                 (WARNING: can be crashy; for developer use only. End
