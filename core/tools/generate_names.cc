@@ -240,6 +240,9 @@ NameDef names[] = {
     {"skipSetter", "skip_setter"},
 
     {"wrapInstance", "wrap_instance"},
+    {"dynamicCast", "dynamic_cast"},
+    {"InterfaceWrapper", "InterfaceWrapper", true},
+    {"nonNilDynamicCast", "non_nil_dynamic_cast"},
 
     {"registered"},
     {"instanceRegistered", "<instance_registered>"},
