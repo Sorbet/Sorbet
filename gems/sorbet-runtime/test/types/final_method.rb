@@ -631,7 +631,7 @@ class Opus::Types::Test::FinalMethodTest < Critic::Unit::UnitTest
       extend T::Sig
       sig(:final) {void}
       def self.n0; end
-      sig(:final) {params(x: Integer).void}
+      sig.final {params(x: Integer).void}
       def self.n1(x); end
       sig(:final) {params(x: Integer, y: Integer).void}
       def self.n2(x, y); end
@@ -748,17 +748,5 @@ class Opus::Types::Test::FinalMethodTest < Critic::Unit::UnitTest
     Module.new do
       extend m1, m1
     end
-  end
-
-  it "has a good error if you use the wrong syntax" do
-    err = assert_raises(ArgumentError) do
-      m = Module.new do
-        extend T::Sig
-        sig {final.void}
-        def self.foo; end
-      end
-      m.foo
-    end
-    assert_includes(err.message, "The syntax for declaring a method final is `sig(:final) {...}`, not `sig {final. ...}`")
   end
 end

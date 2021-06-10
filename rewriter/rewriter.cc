@@ -4,6 +4,7 @@
 #include "common/typecase.h"
 #include "main/pipeline/semantic_extension/SemanticExtension.h"
 #include "rewriter/AttrReader.h"
+#include "rewriter/ChainedSig.h"
 #include "rewriter/ClassNew.h"
 #include "rewriter/Cleanup.h"
 #include "rewriter/Command.h"
@@ -182,6 +183,11 @@ public:
         }
 
         if (auto expr = SelfNew::run(ctx, send)) {
+            return expr;
+        }
+
+        if (auto expr = ChainedSig::run(ctx, send)) {
+            SigRewriter::run(ctx, ast::cast_tree<ast::Send>(expr));
             return expr;
         }
 
