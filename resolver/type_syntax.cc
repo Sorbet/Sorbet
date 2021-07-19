@@ -426,11 +426,7 @@ ParsedSig parseSigWithSelfTypeParams(core::Context ctx, const ast::Send &sigSend
                 case core::Names::onFailure().rawId():
                     break;
                 case core::Names::final_().rawId():
-                    if (auto e = ctx.beginError(send->loc, core::errors::Resolver::InvalidMethodSignature)) {
-                        reportedInvalidMethod = true;
-                        e.setHeader("The syntax for declaring a method final is `sig(:final) {{...}}`, not `sig "
-                                    "{{final. ...}}`");
-                    }
+                    sig.seen.final = true;
                     break;
                 default:
                     if (auto e = ctx.beginError(send->loc, core::errors::Resolver::InvalidMethodSignature)) {

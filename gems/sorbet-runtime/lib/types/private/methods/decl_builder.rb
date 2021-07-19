@@ -6,6 +6,7 @@ module T::Private::Methods
 
   class DeclBuilder
     attr_reader :decl
+    attr_writer :raw
 
     class BuilderError < StandardError; end
 
@@ -115,7 +116,7 @@ module T::Private::Methods
       self
     end
 
-    def abstract
+    def abstract(&blk)
       check_live!
 
       case decl.mode
@@ -127,15 +128,27 @@ module T::Private::Methods
         raise BuilderError.new("`.abstract` cannot be combined with `.override` or `.overridable`.")
       end
 
+      if blk
+        T::Private::DeclState.current.active_declaration.blk = blk
+      end
+
       self
     end
 
-    def final
+    def final(&blk)
       check_live!
-      raise BuilderError.new("The syntax for declaring a method final is `sig(:final) {...}`, not `sig {final. ...}`")
+
+      active_declaration = T::Private::DeclState.current.active_declaration
+
+      if blk
+        active_declaration.blk = blk
+        active_declaration.final = true
+      end
+
+      self
     end
 
-    def override(allow_incompatible: false)
+    def override(allow_incompatible: false, &blk)
       check_live!
 
       case decl.mode
@@ -150,10 +163,14 @@ module T::Private::Methods
         raise BuilderError.new("`.override` cannot be combined with `.abstract`.")
       end
 
+      if blk
+        T::Private::DeclState.current.active_declaration.blk = blk
+      end
+
       self
     end
 
-    def overridable
+    def overridable(&blk)
       check_live!
 
       case decl.mode
@@ -165,6 +182,10 @@ module T::Private::Methods
         decl.mode = Modes.overridable
       when Modes.overridable, Modes.overridable_override
         raise BuilderError.new(".overridable cannot be repeated in a single signature")
+      end
+
+      if blk
+        T::Private::DeclState.current.active_declaration.blk = blk
       end
 
       self
